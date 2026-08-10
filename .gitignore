@@ -1,0 +1,19 @@
+# Terraform
+infra/terraform.exe
+infra/.terraform/
+*.exe
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Ambiente/segredos
+.env
+
+# Jupyter
+.ipynb_checkpoints/

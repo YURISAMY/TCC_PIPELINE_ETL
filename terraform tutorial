@@ -1,0 +1,44 @@
+Terraform é declarativo: você descreve o estado final que quer 
+"eu quero que exista um bucket chamado pluviometria com essas 3 chaves dentro" 
+o Terraform calcula sozinho o que precisa fazer pra chegar lá.
+ Ele não executa em sequência linha por linha como um script;
+
+Na pratica ele:
+Lê tudo que você declarado nos arquivos .tf (todos, então separar eles em módulos não afeta o comando terraform init)
+Compara com o que existe hoje (isso é o *state*, arquivo terraform.tfstate)
+Calcula a diferença (isso é o plan)
+Aplica só a diferença (isso é o apply)
+
+sobre a sintaxe do terraform: A linguagem se chama HCL (HashiCorp Configuration Language). A unidade básica é o bloco:
+
+<tipo_de_bloco> "<tipo_do_recurso>" "<nome_que_você_dá>" {
+  argumento = valor
+}
+
+existem alguns mais comuns:
+
+Bloco	                            Pra que serve
+terraform { }	                          configura o próprio Terraform (versão, providers necessários)
+provider "aws" { }	                    configura credenciais/endpoint de um provedor
+resource "tipo" "nome" { }	            declara algo que deve existir (bucket, objeto, etc.)
+variable "nome" { }	                    declara um parâmetro de entrada
+output "nome" { }	                      expõe um valor pra fora (terminal, ou outro módulo)
+
+
+Referenciar algo que outro bloco criou é sempre tipo.nome.atributo:
+
+bucket = aws_s3_bucket.lakehouse_pluviometria.id
+
+Isso cria uma dependência implícita, Dessa forma o Terraform entende sozinho que precisa criar o bucket antes do objeto
+sem que seja preciso dizer "primeiro faça isso, depois aquilo".
+
+Interpolação de string usa ${ }, mas hoje em dia geralmente nem precisa dos ${} se for só uma referência direta:
+
+# como usar
+
+terraform init      # baixa os providers (só precisa rodar de novo se mudar provider/versão)
+terraform plan       # mostra o que vai mudar, SEM aplicar (seguro rodar quantas vezes quiser)
+terraform apply       # aplica de fato (pede confirmação "yes")
+terraform destroy      # desfaz tudo que o Terraform criou
+terraform output       # mostra os valores dos outputs
+terraform state list     # lista o que está no state hoje
