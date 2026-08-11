@@ -42,3 +42,82 @@ terraform apply       # aplica de fato (pede confirmação "yes")
 terraform destroy      # desfaz tudo que o Terraform criou
 terraform output       # mostra os valores dos outputs
 terraform state list     # lista o que está no state hoje
+
+
+block_public_acls → impede que alguém adicione uma ACL pública nova
+
+block_public_policy → block_public_policy – (Opcional) Se o Amazon S3 deve bloquear políticas públicas de bucket para este bucket.
+O padrão é false. Ativar essa configuração não afeta a política de bucket já existente.
+Quando configurado como true, o Amazon S3 rejeita chamadas para PUT Bucket policy se a política de bucket especificada permitir acesso público.
+
+ignore_public_acls → mesmo que já exista uma ACL pública (herdada, erro antigo), o S3 ignora ela na prática
+restrict_public_buckets → mesmo que a bucket policy tecnicamente permita acesso público, restringe o acesso só a usuários/serviços dentro da própria conta AWS
+
+
+block_public_policy
+ignore_public_acls
+
+restrict_public_buckets
+
+
+Definição dos blocos
+
+/////////////////////CRIAÇÃO DO BUCKET//////////////////////
+
+resource "aws_s3_bucket" "<apelido>" {
+  bucket        = "<nome-globalmente-único-na-aws>"
+  force_destroy = <true ou false>
+}
+
+/////////////////////HABILITAÇÃO DE VERSIONAMENTO//////////////////////
+
+resource "aws_s3_bucket_versioning" "<apelido>" {
+  bucket = aws_s3_bucket.<apelido>.id
+
+  versioning_configuration {
+    status = "<Enabled ou Suspended>"
+  }
+}
+
+/////////////////////DEFINIÇÃO DE POLITICAS PUBLICAS//////////////////////
+resource "aws_s3_bucket_public_access_block" "<apelido_do_bucket>" {
+  bucket = aws_s3_bucket.<apelido_do_bucket>.id
+
+  block_public_acls       = <true ou false>
+  ignore_public_acls      = <true ou false>
+  block_public_policy     = <true ou false>
+  restrict_public_buckets = <true ou false>
+}
+
+/////////////////////POLITICA DO BUCKET//////////////////////
+
+resource "aws_s3_bucket_policy" "<apelido_descritivo>" {
+  bucket = aws_s3_bucket.<apelido_do_bucket>.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "<nome_livre_pra_identificar_essa_regra>"
+      Effect    = "<Allow ou Deny>"
+      Principal = <"*" ou o ARN de um usuário/role específico>
+      Action    = "<qual ação da API S3, ex: s3:GetObject>"
+      Resource  = "<ARN do bucket ou dos objetos dentro dele>"
+    }]
+  })
+}
+
+output "<nome_livre_do_output>" {
+  value       = <referência a algum atributo de resource>
+  description = "<explicação do que esse valor representa>"
+  sensitive   = <true ou false>
+}
+
+conceitualmente (o Terraform é a fonte da verdade, você só consulta ele)
+
+comandos: 
+
+terraform fmt      # ajusta formatação/indentação automaticamente
+terraform validate # checa erros de sintaxe, bem mais rápido que plan
+terraform plan     # mostra o que vai mudar
+terraform apply    # aplica, depois de você revisar o plan
+terraform validate # checa a validade da sintaxe
