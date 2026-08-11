@@ -1,19 +1,34 @@
 # Terraform
 infra/terraform.exe
 infra/.terraform/
+.terraform/
 *.exe
 *.tfstate
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+.terraform.lock.hcl
 
-# Python
+# Python / UV
 .venv/
 __pycache__/
 *.pyc
 
-# Ambiente/segredos
+# Ambiente / Segredos
 .env
+.env.*
+!*.env.example
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Dados locais e arquivos temporários de ETL (opcional, mas recomendado)
+*.csv
+*.parquet
+*.jsonl
+/data/
+/tmp/
+
+# VS Code / IDEs
+.vscode/
+.DS_Store
