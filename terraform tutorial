@@ -121,3 +121,6 @@ terraform validate # checa erros de sintaxe, bem mais rápido que plan
 terraform plan     # mostra o que vai mudar
 terraform apply    # aplica, depois de você revisar o plan
 terraform validate # checa a validade da sintaxe
+
+adicionar sufixo aos nomes (quando for mandar de fato para a aws)
+
