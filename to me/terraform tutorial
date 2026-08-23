@@ -136,3 +136,56 @@ resource "aws_lambda_function" "<apelido>" {
   timeout          = <segundos até a AWS matar a execução se travar>
   memory_size      = <MB de memória alocada>
 }
+
+
+O que é EventBridge
+
+É o serviço de eventos da AWS — pensa nele como um "sistema nervoso central" que recebe sinais de várias fontes 
+(um horário batendo, um arquivo chegando em algum lugar, um outro serviço avisando "aconteceu isso") e decide quem deve reagir a cada sinal.
+ O Scheduler é uma parte específica dele, focada só em "sinais baseados em tempo" (cron, rate) — é o "despertador" da AWS.
+
+ resource "aws_iam_role" "<apelido>" {
+  name = "<nome-da-role>"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = {
+        Service = "<qual serviço assume essa role?>"
+      }
+    }]
+  })
+}
+
+
+resource "aws_iam_role_policy" "<apelido>" {
+  name = "<nome-da-policy>"
+  role = <referência à role acima>
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "<qual ação permite invocar uma Lambda?>"
+      Resource = <referência ao ARN da função ingest-bronze>
+    }]
+  })
+}
+
+
+resource "aws_scheduler_schedule" "<apelido>" {
+  name = "<nome-do-agendamento>"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  schedule_expression = "<expressão de taxa/cron para 24h>"
+
+  target {
+    arn      = <referência ao ARN da função Lambda>
+    role_arn = <referência ao ARN da role do Scheduler>
+  }
+}

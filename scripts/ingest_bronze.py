@@ -1,8 +1,10 @@
+import os
 import requests
 import boto3
 
+BUCKET_BRONZE = os.environ["BUCKET_BRONZE_NAME"]
+
 def ingest_bronze_def(event, context):
-    # STEP 1: Baixar o arquivo da FUNCEME
     url = "https://cdn.funceme.br/calendario/postos/postos.zip"
     arquivo_local = "/tmp/postos.zip"
 
@@ -16,7 +18,6 @@ def ingest_bronze_def(event, context):
             if chunk:
                 f.write(chunk)
 
-
     s3_client = boto3.client(
         's3',
         endpoint_url='http://localhost:4566',
@@ -29,8 +30,13 @@ def ingest_bronze_def(event, context):
 
     s3_client.upload_file(
         Filename=arquivo_local,
-        Bucket="medallion-bronze",
+        Bucket=BUCKET_BRONZE,
         Key="bronze/raw/postos.zip"
     )
 
     print("Arquivo enviado com sucesso para o bucket S3.")
+
+if __name__ == "__main__":
+    # Só roda quando você executa "python ingest_bronze.py" direto
+    os.environ["BUCKET_BRONZE_NAME"] = "medallion-bronze"  # simula a variável que a Lambda injetaria
+    ingest_bronze_def(None, None)  # event e context não importam pro seu script, então passa None
