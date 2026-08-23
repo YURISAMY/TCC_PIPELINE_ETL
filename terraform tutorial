@@ -124,3 +124,15 @@ terraform validate # checa a validade da sintaxe
 
 adicionar sufixo aos nomes (quando for mandar de fato para a aws)
 
+resource "aws_lambda_function" "<apelido>" {
+  function_name    = "<nome-que-aparece-na-aws>"
+  role             = <referência ao ARN da role IAM>
+  handler          = "<arquivo_python>.<nome_da_função_handler>"
+  runtime          = "<versão do runtime, ex: python3.12>"
+
+  filename         = <caminho pro zip gerado pelo archive_file>
+  source_code_hash = <hash do zip, pra o Terraform saber se o código mudou>
+
+  timeout          = <segundos até a AWS matar a execução se travar>
+  memory_size      = <MB de memória alocada>
+}
