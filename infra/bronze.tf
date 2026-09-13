@@ -10,7 +10,6 @@ resource "aws_iam_role" "lambda_ingest_bronze" {
       Effect = "Allow"
       Action = "sts:AssumeRole"
       Principal = {
-
         Service = "lambda.amazonaws.com"
       }
     }]

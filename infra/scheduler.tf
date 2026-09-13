@@ -31,7 +31,7 @@ resource "aws_iam_role_policy" "scheduler_bronze_policy" {
   })
 }
 
-//as regras dessa nova identidade, são que uma vez assumindo ela, é possivel invocar a função ingest-bronze, que é uma lambda criada em lambda.tf. 
+//as regras dessa nova identidade, são que uma vez assumindo ela, é possivel invocar a função ingest-bronze, que é uma lambda criada em bronze.tf. 
 
 resource "aws_scheduler_schedule" "funceme_ingest_scheduler" {
   name = "funceme_ingest_schedule"
@@ -39,14 +39,17 @@ resource "aws_scheduler_schedule" "funceme_ingest_scheduler" {
   flexible_time_window {
     mode = "OFF"
   }
-  
-  //mudei para 1 minuto para ver funcionando
-  schedule_expression = "rate(1 hour)"
+
+  //mudei para 1 minuto para ver funcionando (1 minutes) ou 1 (hour)
+  schedule_expression = "rate(1 minutes)"
 
   target {
     arn      = aws_lambda_function.ingest-bronze.arn
     role_arn = aws_iam_role.lambda_scheduler.arn
   }
+
+  // acima basicamente oque é definido é: O que executar?(arn) e Com qual autorização?(role_arn)
+
 }
 
 // o agendador de ingestão da funceme a cada 24 horas, assume a role lambda scheduler e chama o ingest-bronze

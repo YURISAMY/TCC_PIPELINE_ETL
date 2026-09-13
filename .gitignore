@@ -38,3 +38,22 @@ IAM VS BUCKET POLICY.png
 postos.zip
 
 *.png
+
+# Cache Python
+__pycache__/
+*.py[cod]
+
+# Dependências e metadados de pacotes instalados localmente
+scripts/bin/
+scripts/dateutil/
+scripts/numpy/
+scripts/numpy.libs/
+scripts/pandas/
+scripts/pyarrow/
+scripts/pytz/
+scripts/six*
+scripts/tzdata/
+scripts/*.dist-info/
+
+# Pacotes ZIP gerados pelo Terraform
+scripts/*.zip

@@ -18,6 +18,7 @@ dependencies = [
     "localstack-client==2.12",
     "numpy==2.5.2",
     "pandas==3.0.5",
+    "psycopg2>=2.9.13",
     "pyarrow>=25.0.1",
     "pyasn1==0.6.4",
     "python-dateutil==2.9.0.post0",
