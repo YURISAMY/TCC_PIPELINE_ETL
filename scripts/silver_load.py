@@ -220,5 +220,3 @@ if __name__ == "__main__":
     processar_camada_silver(conteudo_bytes, s3_local, os.environ["BUCKET_SILVER_NAME"])
 
     print("\nExecução concluída com sucesso!")
-
-#preciso testar o script pra ver se ta funcionando

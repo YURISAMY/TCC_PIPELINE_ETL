@@ -1,1 +1,3 @@
 backoff exponencial com o lambda
+
+considerar nulificar os 999 e 888

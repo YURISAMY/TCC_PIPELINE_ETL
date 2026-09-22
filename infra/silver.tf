@@ -68,13 +68,6 @@ resource "aws_iam_role_policy_attachment" "lambda_silver_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Empacota o script Python da Silver em ZIP
-data "archive_file" "silver_load_zip" {
-  type        = "zip"
-  source_dir  = "${path.module}/../scripts"
-  output_path = "${path.module}/../scripts/silver_load_package.zip"
-}
-
 # Declara a função Lambda de transformação
 resource "aws_lambda_function" "silver_process" {
   function_name = "silver-process-lambda"
@@ -82,9 +75,17 @@ resource "aws_lambda_function" "silver_process" {
   handler       = "silver_load.lambda_handler"
   runtime       = "python3.12"
 
+#PARA AWS
+
   #layers = [
   #  "arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python312:14"
   #]
+
+#LAYER LOCAL
+
+layers = [
+    aws_lambda_layer_version.pandas_local.arn
+  ]
 
   filename         = data.archive_file.silver_load_zip.output_path
   source_code_hash = data.archive_file.silver_load_zip.output_base64sha256
@@ -135,4 +136,17 @@ resource "aws_s3_bucket_notification" "bronze_to_silver_trigger" {
   }
 
   depends_on = [aws_lambda_permission.allow_bucket_bronze_to_invoke_silver]
+}
+
+resource "aws_lambda_layer_version" "pandas_local" {
+  filename            = "${path.module}/local_layer/pandas_layer.zip"
+  layer_name          = "pandas-pyarrow-local-layer"
+  compatible_runtimes = ["python3.12"]
+  source_code_hash    = filebase64sha256("${path.module}/local_layer/pandas_layer.zip")
+}
+
+data "archive_file" "silver_load_zip" {
+  type        = "zip"
+  source_file = "${path.module}/../scripts/silver_load.py"
+  output_path = "${path.module}/../scripts/silver_load_package.zip"
 }
