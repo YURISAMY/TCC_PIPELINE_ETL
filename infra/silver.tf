@@ -83,10 +83,9 @@ resource "aws_lambda_function" "silver_process" {
 
 #LAYER LOCAL
 
-# No bloco resource "aws_lambda_function" "silver_process":
-# layers = [
-#   aws_lambda_layer_version.pandas_local.arn
-# ]
+layers = [
+    aws_lambda_layer_version.pandas_local.arn
+  ]
 
   filename         = data.archive_file.silver_load_zip.output_path
   source_code_hash = data.archive_file.silver_load_zip.output_base64sha256
@@ -148,7 +147,6 @@ resource "aws_lambda_layer_version" "pandas_local" {
 
 data "archive_file" "silver_load_zip" {
   type        = "zip"
-  source_dir  = "${path.module}/../scripts"
+  source_file = "${path.module}/../scripts/silver_load.py"
   output_path = "${path.module}/../scripts/silver_load_package.zip"
-  excludes    = ["*.zip", "__pycache__", "old script.ipynb", "teste_de_precisão.py", "inspecionar.py", "gerar_csv.py"]
 }

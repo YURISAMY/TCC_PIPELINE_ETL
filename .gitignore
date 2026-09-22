@@ -60,3 +60,11 @@ scripts/*.zip
 
 # Layer local temporária para MiniStack/LocalStack
 infra/local_layer/
+
+# Builds locais de Lambda
+infra/scripts/lambda_build/
+infra/local_layer/
+dist_silver/
+downloads/
+scripts/downloads/
+*.zip
