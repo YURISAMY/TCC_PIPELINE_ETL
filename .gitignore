@@ -57,3 +57,6 @@ scripts/*.dist-info/
 
 # Pacotes ZIP gerados pelo Terraform
 scripts/*.zip
+
+# Layer local temporária para MiniStack/LocalStack
+infra/local_layer/
