@@ -2,6 +2,7 @@ import calendar
 from datetime import datetime
 import io
 import os
+import urllib.parse
 import zipfile
 import boto3
 import pandas as pd
@@ -13,19 +14,57 @@ FALHA_MEDICAO = 999.0     # Dia existiu no calendário, mas não houve medição
 DIA_INEXISTENTE = 888.0   # Dia não existe no calendário daquele mês (ex: 31 de abril)
 
 
+def obter_s3_client():
+    endpoint = os.environ.get("AWS_ENDPOINT_URL")
+    if endpoint:
+        return boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+            region_name="us-east-1"
+        )
+    return boto3.client("s3")
+
+
 def lambda_handler(event, context):
-    s3_client = boto3.client("s3")
+    s3_client = obter_s3_client()
     
-    bucket_bronze = os.environ["BUCKET_BRONZE_NAME"]    
-    bucket_silver = os.environ["BUCKET_SILVER_NAME"]
-    chave_zip = os.environ["CHAVE_ZIP"] = "bronze/raw/postos.zip"
+    # 1. Se foi chamada por evento S3, extrai as informações
+    chave_zip = None
+    bucket_bronze = os.environ.get("BUCKET_BRONZE_NAME")
+    bucket_silver = os.environ.get("BUCKET_SILVER_NAME")
     
-    # 1. Baixa o ZIP em memória (bytes puros)
+    if event and "Records" in event and len(event["Records"]) > 0:
+        record = event["Records"][0]
+        # Ignora eventos de teste do S3 (s3:TestEvent)
+        if record.get("eventName") == "s3:TestEvent":
+            print("Evento de teste do S3 recebido. Ignorando...")
+            return {"statusCode": 200, "body": "Test event ignored"}
+            
+        if "s3" in record:
+            bucket_bronze = record["s3"]["bucket"]["name"]
+            chave_zip = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
+    
+    # Se não veio do evento, tenta usar o valor de ambiente padrão
+    if not chave_zip:
+        chave_zip = os.environ.get("CHAVE_ZIP", "bronze/raw/postos.zip")
+
+    # 2. Verifica se o arquivo realmente existe antes de tentar o get_object
+    try:
+        s3_client.head_object(Bucket=bucket_bronze, Key=chave_zip)
+    except Exception:
+        print(f"Aviso: O arquivo {chave_zip} ainda não existe no bucket {bucket_bronze}. Aguardando ingestão...")
+        return {"statusCode": 200, "body": "Arquivo ainda não disponível"}
+
+    print(f"Iniciando processamento. Bucket: {bucket_bronze} | Chave: {chave_zip}")
+    
+    # 3. Baixa e processa normalmente
     objeto_s3 = s3_client.get_object(Bucket=bucket_bronze, Key=chave_zip)
     conteudo_zip_bytes = objeto_s3["Body"].read()
-    
-    # 2. Executa o tratamento
     processar_camada_silver(conteudo_zip_bytes, s3_client, bucket_silver)
+
+    print("\nExecução concluída com sucesso! Arquivo Parquet gerado na camada Silver.")
     
     return {
         "statusCode": 200,

@@ -68,3 +68,9 @@ dist_silver/
 downloads/
 scripts/downloads/
 *.zip
+
+# Pastas de build de layers e pacotes
+infra/layers/
+infra/scripts/lambda_build/
+infra/scripts/silver_build/
+*.zip

@@ -68,6 +68,29 @@ resource "aws_iam_role_policy_attachment" "lambda_silver_logs" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# Empacota o script Python da Silver em ZIP
+data "archive_file" "silver_load_zip" {
+  type        = "zip"
+  source_file = "${path.module}/../scripts/silver_load.py"
+  output_path = "${path.module}/../scripts/silver_load_package.zip"
+}
+
+#Empacota a pasta local_layer em ZIP automaticamente pelo Terraform
+#data "archive_file" "pandas_layer_zip" {
+#  type        = "zip"
+#  source_dir  = "${path.module}/local_layer"
+#  output_path = "${path.module}/local_layer.zip"
+#  excludes    = ["*.zip"]
+#}
+
+#Cria a Layer usando o zip gerado acima
+#resource "aws_lambda_layer_version" "pandas_local" {
+#  filename            = data.archive_file.pandas_layer_zip.output_path
+#  layer_name          = "pandas-pyarrow-local-layer"
+#  compatible_runtimes = ["python3.12"]
+#  source_code_hash    = data.archive_file.pandas_layer_zip.output_base64sha256
+#}
+
 # Declara a função Lambda de transformação
 resource "aws_lambda_function" "silver_process" {
   function_name = "silver-process-lambda"
@@ -75,17 +98,15 @@ resource "aws_lambda_function" "silver_process" {
   handler       = "silver_load.lambda_handler"
   runtime       = "python3.12"
 
-#PARA AWS
-
+  #PARA AWS
   #layers = [
   #  "arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python312:14"
   #]
 
-#LAYER LOCAL
-
-layers = [
-    aws_lambda_layer_version.pandas_local.arn
-  ]
+  #LAYER LOCAL
+  #layers = [
+  #  aws_lambda_layer_version.pandas_local.arn
+  #]
 
   filename         = data.archive_file.silver_load_zip.output_path
   source_code_hash = data.archive_file.silver_load_zip.output_base64sha256
@@ -93,11 +114,12 @@ layers = [
   timeout     = 180
   memory_size = 512
 
-  environment {
+environment {
     variables = {
       BUCKET_BRONZE_NAME = aws_s3_bucket.bronze.id
       BUCKET_SILVER_NAME = aws_s3_bucket.silver.id
       CHAVE_ZIP          = "bronze/raw/postos.zip"
+      AWS_ENDPOINT_URL   = "http://host.docker.internal:4566"
     }
   }
 }
@@ -124,7 +146,6 @@ resource "aws_lambda_permission" "allow_bucket_bronze_to_invoke_silver" {
   //quem pode fazer isso? 
 }
 
-
 resource "aws_s3_bucket_notification" "bronze_to_silver_trigger" {
   bucket = aws_s3_bucket.bronze.id
 
@@ -136,17 +157,4 @@ resource "aws_s3_bucket_notification" "bronze_to_silver_trigger" {
   }
 
   depends_on = [aws_lambda_permission.allow_bucket_bronze_to_invoke_silver]
-}
-
-resource "aws_lambda_layer_version" "pandas_local" {
-  filename            = "${path.module}/local_layer/pandas_layer.zip"
-  layer_name          = "pandas-pyarrow-local-layer"
-  compatible_runtimes = ["python3.12"]
-  source_code_hash    = filebase64sha256("${path.module}/local_layer/pandas_layer.zip")
-}
-
-data "archive_file" "silver_load_zip" {
-  type        = "zip"
-  source_file = "${path.module}/../scripts/silver_load.py"
-  output_path = "${path.module}/../scripts/silver_load_package.zip"
 }
