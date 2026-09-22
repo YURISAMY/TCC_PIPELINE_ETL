@@ -11,7 +11,7 @@ def ingest_bronze_def(event, context):
     # 1. Recupera o nome do bucket da variável de ambiente
     bucket_bronze = os.environ["BUCKET_BRONZE_NAME"]
 
-    # 2. Configura a sessão HTTP com Retry e Exponential Backoff
+    # 2. Configuração da sessão HTTP com Retry e Exponential Backoff
     session = requests.Session()
     retries = Retry(
         total=5,
