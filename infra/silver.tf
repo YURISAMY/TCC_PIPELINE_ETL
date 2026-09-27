@@ -114,7 +114,7 @@ resource "aws_lambda_function" "silver_process" {
   timeout     = 180
   memory_size = 512
 
-  environment {
+environment {
     variables = {
       BUCKET_BRONZE_NAME = aws_s3_bucket.bronze.id
       BUCKET_SILVER_NAME = aws_s3_bucket.silver.id
@@ -127,7 +127,7 @@ resource "aws_lambda_function" "silver_process" {
 resource "aws_lambda_permission" "allow_bucket_bronze_to_invoke_silver" {
   statement_id = "AllowExecutionFromS3BucketBronze"
 
-  // pode ser qualquer nome
+  // pode ser qualquer nome ^
 
   action = "lambda:InvokeFunction"
 
