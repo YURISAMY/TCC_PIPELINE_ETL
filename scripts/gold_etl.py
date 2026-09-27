@@ -1,307 +1,202 @@
-"""
-Camada GOLD - Medallion Architecture (Pipeline FUNCEME)
-============================================================
-
-Responsabilidade desta camada:
-    - Ler o dataset consolidado da SILVER (S3, Parquet).
-    - Calcular as métricas de negócio por posto: dias/meses/anos de
-      falha, percentuais, médias mensais e anual de precipitação.
-    - Gerar os artefatos finais prontos para consumo:
-        * gold/postos_resumo.parquet  -> analítico (BI / notebooks)
-        * gold/postos_resumo.csv      -> mesma coisa em CSV
-        * gold/postos_resumo.json     -> consumido pelo site estático
-
-Design goals em relação ao notebook original:
-    - A célula 13 do notebook (médias mensais) fazia um loop manual
-      acumulando totais/contadores mês a mês por posto -- substituído
-      por um `pivot_table` vetorizado (mesma lógica, ordens de
-      grandeza mais rápido em bases grandes).
-    - Sem escrita em disco local: tudo via boto3 + BytesIO, compatível
-      com Lambda.
-    - Não depende mais de arquivos auxiliares locais (`links.csv`,
-      `municipios.csv`) para rodar -- isso fica marcado como um TODO /
-      próximo passo no roadmap, com um parâmetro opcional de join.
-    - A parte de inserção no Supabase (Postgres) do notebook original
-      foi deliberadamente removida daqui: é uma responsabilidade de
-      *serving*, não de transformação Gold. Fica como um step separado
-      e opcional (ver função `load_to_postgres`, desligada por padrão).
-"""
-
-from __future__ import annotations
-
 import io
 import json
-import logging
 import os
-import unicodedata
-from dataclasses import dataclass
-from typing import Optional
-
 import boto3
 import numpy as np
 import pandas as pd
 
-logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO"),
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
-logger = logging.getLogger("gold_etl")
+FALHA_MEDICAO = 999.0
+DIA_INEXISTENTE = 888.0
+COLUNAS_DIAS = [f"Dia{i}" for i in range(1, 32)]
 
-FALHA_DIA_SENTINEL = 999.0
-DIA_COLS = [f"Dia{i}" for i in range(1, 32)]
-MESES_NOMES = ["Jan", "Fev", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+MESES_NOME = [
+    "Jan_chuva", "Fev_chuva", "Mar_chuva", "Apr_chuva",
+    "May_chuva", "Jun_chuva", "Jul_chuva", "Aug_chuva",
+    "Sep_chuva", "Oct_chuva", "Nov_chuva", "Dec_chuva"
+]
 
 
-@dataclass(frozen=True)
-class Settings:
-    silver_bucket: str = os.environ.get("SILVER_BUCKET", "medallion-silver")
-    gold_bucket: str = os.environ.get("GOLD_BUCKET", "medallion-gold")
-    silver_key: str = os.environ.get(
-        "SILVER_KEY", "silver/postos_pluviometricos/latest/postos_pluviometricos.parquet"
+def carregar_dados_silver(s3_client, bucket_silver: str, chave_parquet: str) -> pd.DataFrame:
+    objeto_s3 = s3_client.get_object(Bucket=bucket_silver, Key=chave_parquet)
+    buffer = io.BytesIO(objeto_s3["Body"].read())
+    return pd.read_parquet(buffer, engine="pyarrow")
+
+
+def calcular_estatisticas_posto(df_posto: pd.DataFrame, bucket_gold: str, regiao: str = "us-east-1") -> dict:
+    primeira_linha = df_posto.iloc[0]
+    id_posto = int(primeira_linha["id"])
+
+    matriz_dias = df_posto[COLUNAS_DIAS].to_numpy()
+
+    total_dias_validos_calendario = np.sum(matriz_dias != DIA_INEXISTENTE)
+    dias_falhos = int(np.sum(matriz_dias == FALHA_MEDICAO))
+    dias_medidos = int(np.sum((matriz_dias != DIA_INEXISTENTE) & (matriz_dias != FALHA_MEDICAO)))
+
+    pct_dias_falhos = round((dias_falhos / total_dias_validos_calendario) * 100, 2) if total_dias_validos_calendario > 0 else 0.0
+
+    meses_com_falha_mask = np.any(matriz_dias == FALHA_MEDICAO, axis=1)
+    total_meses = len(df_posto)
+    meses_falha = int(np.sum(meses_com_falha_mask))
+    meses_completos = total_meses - meses_falha
+    pct_meses_falha = round((meses_falha / total_meses) * 100, 2) if total_meses > 0 else 0.0
+
+    df_posto_aux = df_posto[["Anos", "Total"]].copy()
+    df_posto_aux["tem_falha"] = meses_com_falha_mask
+
+    anos_agrupados = df_posto_aux.groupby("Anos").agg(
+        qtd_meses=("Total", "count"),
+        teve_falha=("tem_falha", "any"),
+        soma_ano=("Total", lambda s: s[~df_posto_aux.loc[s.index, "tem_falha"]].sum())
     )
-    gold_prefix: str = os.environ.get("GOLD_PREFIX", "gold/postos_resumo")
-    s3_endpoint_url: Optional[str] = os.environ.get("S3_ENDPOINT_URL") or None
-    aws_access_key_id: str = os.environ.get("AWS_ACCESS_KEY_ID", "test")
-    aws_secret_access_key: str = os.environ.get("AWS_SECRET_ACCESS_KEY", "test")
-    aws_region: str = os.environ.get("AWS_REGION", "us-east-1")
+
+    total_anos = len(anos_agrupados)
+    anos_completos = int(np.sum((anos_agrupados["qtd_meses"] == 12) & (~anos_agrupados["teve_falha"])))
+    anos_falha = total_anos - anos_completos
+    pct_anos_falha = round((anos_falha / total_anos) * 100, 2) if total_anos > 0 else 0.0
+
+    precipitacao_media_anual = round(float(anos_agrupados["soma_ano"].mean()), 2) if total_anos > 0 else 0.0
+
+    medias_mensais = {}
+    for num_mes, nome_mes in enumerate(MESES_NOME, start=1):
+        dados_mes = df_posto_aux[(df_posto["Meses"] == num_mes) & (~df_posto_aux["tem_falha"])]
+        media_val = dados_mes["Total"].mean() if not dados_mes.empty else 0.0
+        medias_mensais[nome_mes] = str(round(float(media_val), 1))
+
+    link_download_csv = f"https://{bucket_gold}.s3.{regiao}.amazonaws.com/gold/postos_csv/{id_posto}.csv"
+
+    resumo_posto = {
+        "Chave_ID": str(id_posto),
+        "link_csv": link_download_csv,
+        "Nome_Municipio": str(primeira_linha["Municipios"]).strip(),
+        "Nome_Posto": str(primeira_linha["Postos"]).strip(),
+        "Coordenada_Y": str(primeira_linha["Latitude"]),
+        "Coordenada_X": str(primeira_linha["Longitude"]),
+        "Ano_Inicio": str(int(primeira_linha["Ano_inicial"])),
+        "Ano_Fim": str(int(primeira_linha["Ano_final"])),
+        "Mes_Inicio": str(int(primeira_linha["Primeiro_mes"])),
+        "Mes_Fim": str(int(primeira_linha["Ultimo_mes"])),
+        "Total_dias_intervalo": str(int(total_dias_validos_calendario)),
+        "Dias_dados_medidos": str(dias_medidos),
+        "Dias_falhos": str(dias_falhos),
+        "Percentual_dias_falhos": str(pct_dias_falhos),
+        "Total_meses_intervalo": str(total_meses),
+        "Numero_meses_completos": str(meses_completos),
+        "Numero_meses_falha": str(meses_falha),
+        "Percentual_meses_falha": str(pct_meses_falha),
+        "Total_anos_intervalo": str(total_anos),
+        "Numero_anos_completos": str(anos_completos),
+        "Numero_anos_falha": str(anos_falha),
+        "Percentual_anos_falha": str(pct_anos_falha),
+        "Precipitacao_media_anual": str(precipitacao_media_anual),
+    }
+
+    resumo_posto.update(medias_mensais)
+    return resumo_posto
 
 
-def get_s3_client(settings: Settings):
-    kwargs = {"region_name": settings.aws_region}
-    if settings.s3_endpoint_url:
-        kwargs.update(
-            endpoint_url=settings.s3_endpoint_url,
-            aws_access_key_id=settings.aws_access_key_id,
-            aws_secret_access_key=settings.aws_secret_access_key,
-        )
-    return boto3.client("s3", **kwargs)
-
-
-def remover_acentos(texto: str) -> str:
-    return "".join(
-        c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn"
-    )
-
-
-# --------------------------------------------------------------------------
-# 1. Leitura da silver
-# --------------------------------------------------------------------------
-def ler_silver(s3_client, settings: Settings) -> pd.DataFrame:
-    logger.info("Lendo silver de s3://%s/%s", settings.silver_bucket, settings.silver_key)
-    obj = s3_client.get_object(Bucket=settings.silver_bucket, Key=settings.silver_key)
-    return pd.read_parquet(io.BytesIO(obj["Body"].read()), engine="pyarrow")
-
-
-# --------------------------------------------------------------------------
-# 2. Métricas de falha (dias / meses / anos)
-# --------------------------------------------------------------------------
-def calcular_metricas_falha(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    ano_atual = df["Anos"].max() + 1  # mesma referência usada no notebook original
-
-    # dias de falha por linha (mês) e por posto
-    df["Dias_de_Falha_mes"] = (df[DIA_COLS] == FALHA_DIA_SENTINEL).sum(axis=1)
-    total_falhas = df.groupby("id")["Dias_de_Falha_mes"].sum().rename("Total_Falhas")
-
-    def intervalo_dias(ano_inicial: int) -> int:
-        dias = (ano_atual - ano_inicial) * 365
-        dias += sum(
-            1
-            for ano in range(ano_inicial, ano_atual + 1)
-            if (ano % 4 == 0 and ano % 100 != 0) or (ano % 400 == 0)
-        )
-        return dias
-
-    limites = df.groupby("id").agg(
-        Ano_inicial=("Ano_inicial", "first"),
-        Ano_final=("Ano_final", "first"),
-        Primeiro_mes=("Primeiro_mes", "first"),
-        Ultimo_mes=("Ultimo_mes", "first"),
-    )
-    limites["Intervalo_dias"] = limites["Ano_inicial"].apply(intervalo_dias)
-    limites["Intervalo_anos"] = (limites["Ano_final"] - limites["Ano_inicial"]) + 1
-    limites["Total_meses_intervalo"] = limites["Intervalo_anos"] * 12
-
-    limites = limites.join(total_falhas)
-    limites["dias_medidos"] = limites["Intervalo_dias"] - limites["Total_Falhas"]
-    limites["Percentual_dias_falhos"] = (
-        (limites["Total_Falhas"] / limites["Intervalo_dias"]) * 100
-    ).round(2)
-
-    # meses com pelo menos um dia de falha
-    df["Mes_com_falha"] = df["Dias_de_Falha_mes"] > 0
-    meses_falha = df.groupby("id")["Mes_com_falha"].sum().rename("Numero_meses_falha")
-    limites = limites.join(meses_falha)
-    limites["Numero_meses_completos"] = (
-        limites["Total_meses_intervalo"] - limites["Numero_meses_falha"]
-    )
-    limites["Percentual_meses_falha"] = (
-        (limites["Numero_meses_falha"] / limites["Total_meses_intervalo"]) * 100
-    ).round(2)
-
-    # anos com ao menos um mês de falha
-    anos_falha = (
-        df.groupby(["id", "Anos"])["Mes_com_falha"]
-        .any()
-        .groupby("id")
-        .sum()
-        .rename("Numero_anos_falha")
-    )
-    limites = limites.join(anos_falha)
-    limites["Numero_anos_completos"] = limites["Intervalo_anos"] - limites["Numero_anos_falha"]
-    limites["Percentual_anos_falha"] = (
-        (limites["Numero_anos_falha"] / limites["Intervalo_anos"]) * 100
-    ).round(2)
-
-    return limites.reset_index()
-
-
-# --------------------------------------------------------------------------
-# 3. Médias mensais e anual (vetorizado, substitui o loop da célula 13)
-# --------------------------------------------------------------------------
-def calcular_medias(df: pd.DataFrame) -> pd.DataFrame:
-    validos = df[~(df[DIA_COLS] == FALHA_DIA_SENTINEL).any(axis=1)].copy()
-
-    medias_mensais = (
-        validos.pivot_table(index="id", columns="Meses", values="Total", aggfunc="mean")
-        .reindex(columns=range(1, 13))
-    )
-    medias_mensais.columns = [f"Media_{nome}" for nome in MESES_NOMES]
-    medias_mensais = medias_mensais.fillna(999.0)
-
-    soma_anual = validos.groupby(["id", "Anos"])["Total"].sum().groupby("id").sum()
-    intervalo_anos = df.groupby("id")["Ano_final"].first() - df.groupby("id")["Ano_inicial"].first() + 1
-    media_anual = (soma_anual / intervalo_anos).rename("Precipitacao_media_anual")
-
-    # posto sem nenhum mês válido -> sentinela, igual ao notebook original
-    sem_dados = ~medias_mensais.index.isin(validos["id"].unique())
-    media_anual = media_anual.reindex(medias_mensais.index)
-    media_anual[sem_dados] = 999.0
-    media_anual = media_anual.fillna(999.0).round(2)
-
-    resultado = medias_mensais.round(2).reset_index()
-    resultado = resultado.merge(media_anual.reset_index(), on="id")
-    return resultado
-
-
-# --------------------------------------------------------------------------
-# 4. Montagem do resumo final por posto
-# --------------------------------------------------------------------------
-def montar_resumo(df: pd.DataFrame) -> pd.DataFrame:
-    metadados = df.groupby("id").agg(
-        Nome_Posto=("Postos", "first"),
-        Nome_Municipio=("Municipios", "first"),
-        Coordenada_Y=("Latitude", "first"),
-        Coordenada_X=("Longitude", "first"),
-        Ano_Inicio=("Ano_inicial", "first"),
-        Ano_Fim=("Ano_final", "first"),
-        Mes_Inicio=("Primeiro_mes", "first"),
-        Mes_Fim=("Ultimo_mes", "first"),
-    ).reset_index()
-
-    metricas_falha = calcular_metricas_falha(df)
-    medias = calcular_medias(df)
-
-    resumo = metadados.merge(metricas_falha, on="id").merge(medias, on="id")
-    resumo.rename(columns={"id": "ID"}, inplace=True)
-    resumo["ID"] = pd.to_numeric(resumo["ID"], errors="coerce")
-    resumo.dropna(subset=["ID"], inplace=True)
-    resumo.sort_values(by="ID", inplace=True)
-    resumo.reset_index(drop=True, inplace=True)
-
-    duplicados = resumo["ID"].duplicated().sum()
-    if duplicados:
-        logger.warning("%d ID(s) duplicados encontrados no resumo gold.", duplicados)
-
-    return resumo
-
-
-# --------------------------------------------------------------------------
-# 5. Escrita dos artefatos gold
-# --------------------------------------------------------------------------
-def escrever_gold(resumo: pd.DataFrame, s3_client, settings: Settings) -> dict:
-    saidas = {}
-
-    # Parquet (analítico)
-    buf_parquet = io.BytesIO()
-    resumo.to_parquet(buf_parquet, index=False, engine="pyarrow", compression="snappy")
-    key_parquet = f"{settings.gold_prefix}/postos_resumo.parquet"
-    s3_client.put_object(Bucket=settings.gold_bucket, Key=key_parquet, Body=buf_parquet.getvalue())
-    saidas["parquet"] = key_parquet
-
-    # CSV
-    buf_csv = io.StringIO()
-    resumo.to_csv(buf_csv, index=False, decimal=",")
-    key_csv = f"{settings.gold_prefix}/postos_resumo.csv"
-    s3_client.put_object(Bucket=settings.gold_bucket, Key=key_csv, Body=buf_csv.getvalue().encode("utf-8"))
-    saidas["csv"] = key_csv
-
-    # JSON (consumo direto pelo site estático)
-    resumo_json = resumo.copy()
-    resumo_json = resumo_json.map(lambda x: str(x) if isinstance(x, (int, float, np.floating)) else x)
-    resumo_json = resumo_json.map(lambda x: remover_acentos(x) if isinstance(x, str) else x)
-    registros = resumo_json.to_dict(orient="records")
-
-    key_json = f"{settings.gold_prefix}/postos_resumo.json"
-    body = json.dumps(registros, ensure_ascii=False, indent=2).encode("utf-8")
+def salvar_csv_posto(s3_client, bucket_gold: str, id_posto: int, df_posto: pd.DataFrame):
+    """Salva a série histórica tratada do posto em CSV diretamente no S3."""
+    buffer_csv = io.StringIO()
+    df_posto.to_csv(buffer_csv, index=False, sep=";")
+    
+    chave_s3 = f"gold/postos_csv/{id_posto}.csv"
     s3_client.put_object(
-        Bucket=settings.gold_bucket,
-        Key=key_json,
-        Body=body,
-        ContentType="application/json",
+        Bucket=bucket_gold,
+        Key=chave_s3,
+        Body=buffer_csv.getvalue().encode("utf-8"),
+        ContentType="text/csv"
     )
-    saidas["json"] = key_json
 
-    logger.info("Artefatos gold escritos em s3://%s/{%s}", settings.gold_bucket, ", ".join(saidas.values()))
-    return saidas
+import time
+
+def processar_camada_gold(s3_client, bucket_silver: str, chave_silver: str, bucket_gold: str, gerar_csvs: bool = True):
+    tempo_inicio_total = time.time()
+    
+    print(f"Lendo Parquet de s3://{bucket_silver}/{chave_silver}...")
+    df_silver = carregar_dados_silver(s3_client, bucket_silver, chave_silver)
+
+    lista_resumos = []
+    ids_unicos = df_silver["id"].unique()
+    total_postos = len(ids_unicos)
+    print(f"Iniciando agregação para {total_postos} postos...")
+
+    tempo_bloco = time.time()
+
+    for idx, id_posto in enumerate(ids_unicos, start=1):
+        df_posto = df_silver[df_silver["id"] == id_posto]
+        resumo = calcular_estatisticas_posto(df_posto, bucket_gold=bucket_gold)
+        lista_resumos.append(resumo)
+
+        if gerar_csvs:
+            salvar_csv_posto(s3_client, bucket_gold, id_posto, df_posto)
+
+        if idx % 100 == 0 or idx == total_postos:
+            tempo_decorrido_bloco = time.time() - tempo_bloco
+            print(
+                f"Progresso: {idx}/{total_postos} postos processados "
+                f"| Tempo dos últimos {idx % 100 or 100} postos: {tempo_decorrido_bloco:.2f}s"
+            )
+            tempo_bloco = time.time()
+
+    # Salva o arquivo JSON consolidado
+    print(f"Gravando postos_resumo.json em s3://{bucket_gold}/gold/...")
+    conteudo_json = json.dumps(lista_resumos, ensure_ascii=False, indent=2)
+    s3_client.put_object(
+        Bucket=bucket_gold,
+        Key="gold/postos_resumo.json",
+        Body=conteudo_json.encode("utf-8"),
+        ContentType="application/json"
+    )
+
+    tempo_total = time.time() - tempo_inicio_total
+    print("=" * 60)
+    print("CAMADA GOLD FINALIZADA COM SUCESSO!")
+    print(f"Total de postos gerados: {total_postos}")
+    print(f"Tempo total de execução: {tempo_total:.2f} segundos ({tempo_total / 60:.2f} minutos)")
+    print("=" * 60)
 
 
-# --------------------------------------------------------------------------
-# Serving opcional (Postgres/Supabase) -- desligado por padrão
-# --------------------------------------------------------------------------
-def load_to_postgres(resumo: pd.DataFrame, dsn: str, batch_size: int = 5000) -> None:
-    """Opcional: empurra o resumo gold para um Postgres (ex: Supabase).
-    Mantido separado do ETL gold em si -- é uma etapa de *serving*, não
-    de transformação, e idealmente roda como um job/step próprio (para
-    poder trocar de destino sem tocar no pipeline de dados)."""
-    import psycopg2
-    import psycopg2.extras
+def lambda_handler(event, context):
 
-    registros = resumo.to_dict(orient="records")
-    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
-        for i in range(0, len(registros), batch_size):
-            lote = registros[i : i + batch_size]
-            colunas = lote[0].keys()
-            valores = [[r[c] for c in colunas] for r in lote]
-            query = f"INSERT INTO posto ({', '.join(colunas)}) VALUES %s"
-            psycopg2.extras.execute_values(cur, query, valores)
-            logger.info("Lote %d inserido no Postgres.", i // batch_size + 1)
-        conn.commit()
+    print("\nExecução iniciada na camada Gold com sucesso!")
+    
+    """Handler executado pela AWS Lambda via trigger S3 ou invocação manual."""
+    bucket_silver = os.environ.get("BUCKET_SILVER_NAME", "medallion-silver")
+    bucket_gold = os.environ.get("BUCKET_GOLD_NAME", "medallion-gold")
+    chave_silver = "silver/postos_pluviometricos.parquet"
 
+    # Se for disparado por evento S3 real
+    if "Records" in event:
+        chave_silver = event["Records"][0]["s3"]["object"]["key"]
+        bucket_silver = event["Records"][0]["s3"]["bucket"]["name"]
 
-# --------------------------------------------------------------------------
-# Orquestração
-# --------------------------------------------------------------------------
-def run(settings: Optional[Settings] = None) -> dict:
-    settings = settings or Settings()
-    s3_client = get_s3_client(settings)
+    s3_client = boto3.client("s3")
+    processar_camada_gold(
+        s3_client=s3_client,
+        bucket_silver=bucket_silver,
+        chave_silver=chave_silver,
+        bucket_gold=bucket_gold,
+        gerar_csvs=True
+    )
 
-    df = ler_silver(s3_client, settings)
-    resumo = montar_resumo(df)
-    saidas = escrever_gold(resumo, s3_client, settings)
+    print("Processamento da Camada Gold finalizado com sucesso!")
 
-    logger.info("Camada gold concluída: %d postos no resumo final.", len(resumo))
-    return saidas
-
-
-def lambda_handler(event, context):  # noqa: ANN001 - assinatura padrão do Lambda
-    try:
-        saidas = run()
-        return {"statusCode": 200, "body": saidas}
-    except Exception:
-        logger.exception("Falha no ETL da camada gold.")
-        raise
+    return {"statusCode": 200, "body": "Camada Gold gerada com sucesso!"}
 
 
 if __name__ == "__main__":
-    run()
+    s3_local = boto3.client(
+        "s3",
+        endpoint_url="http://localhost:4566",
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+        region_name="us-east-1",
+    )
+
+    processar_camada_gold(
+        s3_client=s3_local,
+        bucket_silver="medallion-silver",
+        chave_silver="silver/postos_pluviometricos.parquet",
+        bucket_gold="medallion-gold",
+        gerar_csvs=True
+    )

@@ -33,7 +33,8 @@ resource "aws_s3_bucket_public_access_block" "silver" {
 
 
 resource "aws_s3_bucket" "gold" {
-  bucket = "medallion-gold"
+  bucket        = "medallion-gold"
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_public_access_block" "gold" {
@@ -45,24 +46,26 @@ resource "aws_s3_bucket_public_access_block" "gold" {
 }
 
 resource "aws_s3_bucket_versioning" "gold" {
-
   bucket = aws_s3_bucket.gold.id
-
   versioning_configuration { status = "Enabled" }
 }
 
 resource "aws_s3_bucket_policy" "gold" {
-
   bucket = aws_s3_bucket.gold.id
+
+  depends_on = [aws_s3_bucket_public_access_block.gold]
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Sid       = "who_can_acess"
+      Sid       = "PublicReadPostosCsvAndJson"
       Effect    = "Allow"
       Principal = "*"
       Action    = "s3:GetObject"
-      Resource  = "${aws_s3_bucket.gold.arn}/*"
+      Resource = [
+        "${aws_s3_bucket.gold.arn}/gold/postos_csv/*",
+        "${aws_s3_bucket.gold.arn}/gold/postos_resumo.json"
+      ]
     }]
   })
 }

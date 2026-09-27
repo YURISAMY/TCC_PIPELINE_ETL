@@ -41,7 +41,7 @@ resource "aws_scheduler_schedule" "funceme_ingest_scheduler" {
   }
 
   //mudei para 1 minuto para ver funcionando (1 minutes) ou 1 (hour)
-  schedule_expression = "rate(1 minutes)"
+  schedule_expression = "rate(5 minutes)"
 
   target {
     arn      = aws_lambda_function.ingest-bronze.arn

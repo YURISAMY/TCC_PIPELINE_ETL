@@ -114,7 +114,7 @@ resource "aws_lambda_function" "silver_process" {
   timeout     = 180
   memory_size = 512
 
-environment {
+  environment {
     variables = {
       BUCKET_BRONZE_NAME = aws_s3_bucket.bronze.id
       BUCKET_SILVER_NAME = aws_s3_bucket.silver.id
