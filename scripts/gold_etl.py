@@ -10,9 +10,9 @@ DIA_INEXISTENTE = 888.0
 COLUNAS_DIAS = [f"Dia{i}" for i in range(1, 32)]
 
 MESES_NOME = [
-    "Jan_chuva", "Fev_chuva", "Mar_chuva", "Apr_chuva",
-    "May_chuva", "Jun_chuva", "Jul_chuva", "Aug_chuva",
-    "Sep_chuva", "Oct_chuva", "Nov_chuva", "Dec_chuva"
+    "Mes_Jan", "Mes_Fev", "Mes_Mar", "Mes_Apr",
+    "Mes_May", "Mes_Jun", "Mes_Jul", "Mes_Aug",
+    "Mes_Sep", "Mes_Oct", "Mes_Nov", "Mes_Dec"
 ]
 
 
@@ -65,6 +65,7 @@ def calcular_estatisticas_posto(df_posto: pd.DataFrame, bucket_gold: str, regiao
     link_download_csv = f"https://{bucket_gold}.s3.{regiao}.amazonaws.com/gold/postos_csv/{id_posto}.csv"
 
     resumo_posto = {
+        "ID": str(id_posto),
         "Chave_ID": str(id_posto),
         "link_csv": link_download_csv,
         "Nome_Municipio": str(primeira_linha["Municipios"]).strip(),
@@ -156,19 +157,20 @@ def processar_camada_gold(s3_client, bucket_silver: str, chave_silver: str, buck
     print("=" * 60)
 
 
-def lambda_handler(event, context):
+import urllib.parse
 
+def lambda_handler(event, context):
     print("\nExecução iniciada na camada Gold com sucesso!")
     
-    """Handler executado pela AWS Lambda via trigger S3 ou invocação manual."""
     bucket_silver = os.environ.get("BUCKET_SILVER_NAME", "medallion-silver")
     bucket_gold = os.environ.get("BUCKET_GOLD_NAME", "medallion-gold")
     chave_silver = "silver/postos_pluviometricos.parquet"
 
     # Se for disparado por evento S3 real
     if "Records" in event:
-        chave_silver = event["Records"][0]["s3"]["object"]["key"]
-        bucket_silver = event["Records"][0]["s3"]["bucket"]["name"]
+        record_s3 = event["Records"][0]["s3"]
+        bucket_silver = record_s3["bucket"]["name"]
+        chave_silver = urllib.parse.unquote_plus(record_s3["object"]["key"])
 
     s3_client = boto3.client("s3")
     processar_camada_gold(
@@ -180,7 +182,6 @@ def lambda_handler(event, context):
     )
 
     print("Processamento da Camada Gold finalizado com sucesso!")
-
     return {"statusCode": 200, "body": "Camada Gold gerada com sucesso!"}
 
 

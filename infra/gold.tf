@@ -62,15 +62,16 @@ resource "aws_lambda_function" "gold_process" {
   runtime       = "python3.12"
 
   
-  # Descomentar a linha abaixo quando for mandar pra AWS
-  # layers = [ "arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python312:14" ]
+  layers = [
+    "arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python312:14"
+  ]
 
   filename         = data.archive_file.gold_load_zip.output_path
   source_code_hash = data.archive_file.gold_load_zip.output_base64sha256 
   # calculo importante do ash, pois caso o script de processamento mude uma unica linha o terraform vai saber que precisa atualizar o codigo pra lambda.
 
   timeout     = 180  
-  memory_size = 512 
+  memory_size = 1024 
 
   environment {
     variables = {

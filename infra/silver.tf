@@ -98,28 +98,21 @@ resource "aws_lambda_function" "silver_process" {
   handler       = "silver_load.lambda_handler"
   runtime       = "python3.12"
 
-  #PARA AWS
-  #layers = [
-  #  "arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python312:14"
-  #]
-
-  #LAYER LOCAL
-  #layers = [
-  #  aws_lambda_layer_version.pandas_local.arn
-  #]
+  layers = [
+    "arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python312:14"
+  ]
 
   filename         = data.archive_file.silver_load_zip.output_path
   source_code_hash = data.archive_file.silver_load_zip.output_base64sha256
 
   timeout     = 180
-  memory_size = 512
+  memory_size = 1024
 
-environment {
+  environment {
     variables = {
       BUCKET_BRONZE_NAME = aws_s3_bucket.bronze.id
       BUCKET_SILVER_NAME = aws_s3_bucket.silver.id
       CHAVE_ZIP          = "bronze/raw/postos.zip"
-      AWS_ENDPOINT_URL   = "http://host.docker.internal:4566"
     }
   }
 }

@@ -40,6 +40,11 @@ resource "aws_iam_role_policy" "lambda_ingest_bronze_write" {
 //Crio aqui a politica/regra da identidade eu criei acima, (role conecta essa regra a identidade acima).
 //Ao assumir essa identidade, será possivel escrever objetos dentro do bucket bronze
 
+resource "aws_iam_role_policy_attachment" "lambda_bronze_logs" {
+  role       = aws_iam_role.lambda_ingest_bronze.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
 data "archive_file" "ingest_bronze_zip" {
   type        = "zip"
   source_file = "${path.module}/../scripts/ingest_bronze.py"
@@ -53,6 +58,10 @@ resource "aws_lambda_function" "ingest-bronze" {
   role          = aws_iam_role.lambda_ingest_bronze.arn
   handler       = "ingest_bronze.ingest_bronze_def"
   runtime       = "python3.12"
+
+  layers = [
+    "arn:aws:lambda:us-east-1:336392948345:layer:AWSSDKPandas-Python312:14"
+  ]
 
   filename         = data.archive_file.ingest_bronze_zip.output_path
   source_code_hash = data.archive_file.ingest_bronze_zip.output_base64sha256
