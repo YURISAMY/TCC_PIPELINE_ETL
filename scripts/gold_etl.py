@@ -1,6 +1,11 @@
 import io
 import json
 import os
+import time
+import urllib.parse
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import boto3
 import numpy as np
 import pandas as pd
@@ -8,6 +13,8 @@ import pandas as pd
 FALHA_MEDICAO = 999.0
 DIA_INEXISTENTE = 888.0
 COLUNAS_DIAS = [f"Dia{i}" for i in range(1, 32)]
+
+FUSO = ZoneInfo("America/Fortaleza")
 
 MESES_NOME = [
     "Mes_Jan", "Mes_Fev", "Mes_Mar", "Mes_Apr",
@@ -43,22 +50,43 @@ def calcular_estatisticas_posto(df_posto: pd.DataFrame, bucket_gold: str, regiao
     df_posto_aux = df_posto[["Anos", "Total"]].copy()
     df_posto_aux["tem_falha"] = meses_com_falha_mask
 
+    hoje = datetime.now(FUSO)
+    ano_atual = hoje.year
+    mes_atual = hoje.month
+
     anos_agrupados = df_posto_aux.groupby("Anos").agg(
         qtd_meses=("Total", "count"),
         teve_falha=("tem_falha", "any"),
         soma_ano=("Total", lambda s: s[~df_posto_aux.loc[s.index, "tem_falha"]].sum())
     )
+    anos_agrupados["completo"] = (
+        (anos_agrupados["qtd_meses"] == 12) & (~anos_agrupados["teve_falha"])
+    )
 
-    total_anos = len(anos_agrupados)
-    anos_completos = int(np.sum((anos_agrupados["qtd_meses"] == 12) & (~anos_agrupados["teve_falha"])))
+    # O ano corrente é parcial por definição: fica fora das estatísticas anuais
+    anos_fechados = anos_agrupados[anos_agrupados.index < ano_atual]
+
+    total_anos = len(anos_fechados)
+    anos_completos = int(anos_fechados["completo"].sum())
     anos_falha = total_anos - anos_completos
     pct_anos_falha = round((anos_falha / total_anos) * 100, 2) if total_anos > 0 else 0.0
 
-    precipitacao_media_anual = round(float(anos_agrupados["soma_ano"].mean()), 2) if total_anos > 0 else 0.0
+    # Média só sobre anos completos, para não puxar a média pra baixo
+    anos_ok = anos_fechados[anos_fechados["completo"]]
+    precipitacao_media_anual = (
+        round(float(anos_ok["soma_ano"].mean()), 2) if not anos_ok.empty else 0.0
+    )
 
     medias_mensais = {}
     for num_mes, nome_mes in enumerate(MESES_NOME, start=1):
-        dados_mes = df_posto_aux[(df_posto["Meses"] == num_mes) & (~df_posto_aux["tem_falha"])]
+        # Desconsidera o mês corrente do ano atual caso ele ainda não tenha fechado,
+        # para que o acumulado parcial não distorça para baixo a média histórica do mês
+        mask_mes = (
+            (df_posto["Meses"] == num_mes)
+            & (~df_posto_aux["tem_falha"])
+            & ~((df_posto["Anos"] == ano_atual) & (df_posto["Meses"] == mes_atual))
+        )
+        dados_mes = df_posto_aux[mask_mes]
         media_val = dados_mes["Total"].mean() if not dados_mes.empty else 0.0
         medias_mensais[nome_mes] = str(round(float(media_val), 1))
 
@@ -99,7 +127,7 @@ def salvar_csv_posto(s3_client, bucket_gold: str, id_posto: int, df_posto: pd.Da
     """Salva a série histórica tratada do posto em CSV diretamente no S3."""
     buffer_csv = io.StringIO()
     df_posto.to_csv(buffer_csv, index=False, sep=";")
-    
+
     chave_s3 = f"gold/postos_csv/{id_posto}.csv"
     s3_client.put_object(
         Bucket=bucket_gold,
@@ -108,23 +136,20 @@ def salvar_csv_posto(s3_client, bucket_gold: str, id_posto: int, df_posto: pd.Da
         ContentType="text/csv"
     )
 
-import time
 
 def processar_camada_gold(s3_client, bucket_silver: str, chave_silver: str, bucket_gold: str, gerar_csvs: bool = True):
     tempo_inicio_total = time.time()
-    
+
     print(f"Lendo Parquet de s3://{bucket_silver}/{chave_silver}...")
     df_silver = carregar_dados_silver(s3_client, bucket_silver, chave_silver)
 
     lista_resumos = []
-    ids_unicos = df_silver["id"].unique()
-    total_postos = len(ids_unicos)
+    total_postos = df_silver["id"].nunique()
     print(f"Iniciando agregação para {total_postos} postos...")
 
     tempo_bloco = time.time()
 
-    for idx, id_posto in enumerate(ids_unicos, start=1):
-        df_posto = df_silver[df_silver["id"] == id_posto]
+    for idx, (id_posto, df_posto) in enumerate(df_silver.groupby("id"), start=1):
         resumo = calcular_estatisticas_posto(df_posto, bucket_gold=bucket_gold)
         lista_resumos.append(resumo)
 
@@ -157,17 +182,15 @@ def processar_camada_gold(s3_client, bucket_silver: str, chave_silver: str, buck
     print("=" * 60)
 
 
-import urllib.parse
-
 def lambda_handler(event, context):
     print("\nExecução iniciada na camada Gold com sucesso!")
-    
+
     bucket_silver = os.environ.get("BUCKET_SILVER_NAME", "medallion-silver")
     bucket_gold = os.environ.get("BUCKET_GOLD_NAME", "medallion-gold")
     chave_silver = "silver/postos_pluviometricos.parquet"
 
     # Se for disparado por evento S3 real
-    if "Records" in event:
+    if event and "Records" in event:
         record_s3 = event["Records"][0]["s3"]
         bucket_silver = record_s3["bucket"]["name"]
         chave_silver = urllib.parse.unquote_plus(record_s3["object"]["key"])
