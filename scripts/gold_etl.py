@@ -3,6 +3,7 @@ import json
 import os
 import time
 import urllib.parse
+import zipfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -123,18 +124,19 @@ def calcular_estatisticas_posto(df_posto: pd.DataFrame, bucket_gold: str, regiao
     return resumo_posto
 
 
-def salvar_csv_posto(s3_client, bucket_gold: str, id_posto: int, df_posto: pd.DataFrame):
-    """Salva a série histórica tratada do posto em CSV diretamente no S3."""
+def salvar_csv_posto(s3_client, bucket_gold: str, id_posto: int, df_posto: pd.DataFrame) -> bytes:
+    """Salva a série do posto em CSV no S3 e devolve o conteúdo (reaproveitado no zip)."""
     buffer_csv = io.StringIO()
     df_posto.to_csv(buffer_csv, index=False, sep=";")
+    corpo = buffer_csv.getvalue().encode("utf-8")
 
-    chave_s3 = f"gold/postos_csv/{id_posto}.csv"
     s3_client.put_object(
         Bucket=bucket_gold,
-        Key=chave_s3,
-        Body=buffer_csv.getvalue().encode("utf-8"),
-        ContentType="text/csv"
+        Key=f"gold/postos_csv/{id_posto}.csv",
+        Body=corpo,
+        ContentType="text/csv",
     )
+    return corpo
 
 
 def processar_camada_gold(s3_client, bucket_silver: str, chave_silver: str, bucket_gold: str, gerar_csvs: bool = True):
@@ -148,21 +150,35 @@ def processar_camada_gold(s3_client, bucket_silver: str, chave_silver: str, buck
     print(f"Iniciando agregação para {total_postos} postos...")
 
     tempo_bloco = time.time()
+    buffer_zip = io.BytesIO()
 
-    for idx, (id_posto, df_posto) in enumerate(df_silver.groupby("id"), start=1):
-        resumo = calcular_estatisticas_posto(df_posto, bucket_gold=bucket_gold)
-        lista_resumos.append(resumo)
+    with zipfile.ZipFile(buffer_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for idx, (id_posto, df_posto) in enumerate(df_silver.groupby("id"), start=1):
+            resumo = calcular_estatisticas_posto(df_posto, bucket_gold=bucket_gold)
+            lista_resumos.append(resumo)
 
-        if gerar_csvs:
-            salvar_csv_posto(s3_client, bucket_gold, id_posto, df_posto)
+            if gerar_csvs:
+                corpo_csv = salvar_csv_posto(s3_client, bucket_gold, id_posto, df_posto)
+                zf.writestr(f"{id_posto}.csv", corpo_csv)
 
-        if idx % 100 == 0 or idx == total_postos:
-            tempo_decorrido_bloco = time.time() - tempo_bloco
-            print(
-                f"Progresso: {idx}/{total_postos} postos processados "
-                f"| Tempo dos últimos {idx % 100 or 100} postos: {tempo_decorrido_bloco:.2f}s"
-            )
-            tempo_bloco = time.time()
+            if idx % 100 == 0 or idx == total_postos:
+                tempo_decorrido_bloco = time.time() - tempo_bloco
+                print(
+                    f"Progresso: {idx}/{total_postos} postos processados "
+                    f"| Tempo dos últimos {idx % 100 or 100} postos: {tempo_decorrido_bloco:.2f}s"
+                )
+                tempo_bloco = time.time()
+
+    # Pacote com todos os postos, para o botão de download do site
+    if gerar_csvs:
+        print("Gravando todos_os_postos.zip...")
+        s3_client.put_object(
+            Bucket=bucket_gold,
+            Key="gold/todos_os_postos.zip",
+            Body=buffer_zip.getvalue(),
+            ContentType="application/zip",
+            ContentDisposition='attachment; filename="todos_os_postos.zip"',
+        )
 
     # Salva o arquivo JSON consolidado
     print(f"Gravando postos_resumo.json em s3://{bucket_gold}/gold/...")

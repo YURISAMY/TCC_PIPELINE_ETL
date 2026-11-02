@@ -68,7 +68,8 @@ resource "aws_s3_bucket_policy" "gold" {
       Action    = "s3:GetObject"
       Resource = [
         "${aws_s3_bucket.gold.arn}/gold/postos_csv/*",
-        "${aws_s3_bucket.gold.arn}/gold/postos_resumo.json"
+        "${aws_s3_bucket.gold.arn}/gold/postos_resumo.json",
+        "${aws_s3_bucket.gold.arn}/gold/todos_os_postos.zip"
       ]
     }]
   })
