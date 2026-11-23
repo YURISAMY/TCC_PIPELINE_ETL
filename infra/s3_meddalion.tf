@@ -8,6 +8,11 @@ resource "aws_s3_bucket" "bronze" {
   bucket = "tcc-funceme-bronze-${random_string.suffix.result}"
 }
 
+resource "aws_s3_bucket_versioning" "bronze" {
+  bucket = aws_s3_bucket.bronze.id
+  versioning_configuration { status = "Enabled" }
+}
+
 resource "aws_s3_bucket_public_access_block" "bronze" {
   bucket                  = aws_s3_bucket.bronze.id
   block_public_acls       = true
@@ -16,14 +21,12 @@ resource "aws_s3_bucket_public_access_block" "bronze" {
   restrict_public_buckets = true
 }
 
-
 resource "aws_s3_bucket" "silver" {
   bucket = "tcc-funceme-silver-${random_string.suffix.result}"
 }
 
 resource "aws_s3_bucket_versioning" "silver" {
   bucket = aws_s3_bucket.silver.id
-
   versioning_configuration { status = "Enabled" }
 }
 
